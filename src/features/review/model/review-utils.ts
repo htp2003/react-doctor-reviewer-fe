@@ -36,7 +36,7 @@ export function getSummaryTone(summary: ReviewSummary): string {
     return 'needs-attention'
   }
 
-  if (summary.warningCount > 20) {
+  if (summary.warningCount > 0) {
     return 'watch-list'
   }
 

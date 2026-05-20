@@ -1,4 +1,6 @@
 export type Severity = 'error' | 'warning' | 'info'
+export type ReviewStatus = 'great' | 'needs_work' | 'critical' | 'unknown'
+export type ReviewSourceMode = 'public' | 'private'
 
 export type ReviewDiagnostic = {
   filePath: string
@@ -13,46 +15,90 @@ export type ReviewDiagnostic = {
 }
 
 export type ReviewSummary = {
+  diagnosticsCount: number
   errorCount: number
   warningCount: number
   affectedFileCount: number
   totalDiagnosticCount: number
-  score: number
   scoreLabel: string
 }
 
-export type ReviewProject = {
+export type ReviewMeta = {
+  repoUrl: string
+  repoFullName?: string
+  private?: boolean
+  installationId?: number
   directory: string
-  project: {
-    rootDirectory: string
-    projectName: string
-    reactVersion: string
-    framework: string
-    hasTypeScript: boolean
-    hasReactCompiler: boolean
-    hasTanStackQuery: boolean
-    sourceFileCount: number
-  }
-  diagnostics: ReviewDiagnostic[]
+  project?: string
+  diff?: string
+  failOn: string
+  offline: boolean
+  verbose: boolean
+  doctorVersion: string
+  elapsedMs: number
 }
 
 export type ReviewReport = {
-  schemaVersion: number
-  version: string
-  ok: boolean
-  directory: string
-  mode: string
-  projects: ReviewProject[]
-  diagnostics: ReviewDiagnostic[]
+  score: number | null
+  status: ReviewStatus
   summary: ReviewSummary
-  elapsedMilliseconds: number
+  diagnostics: ReviewDiagnostic[]
+  raw: unknown
+  meta: ReviewMeta
+}
+
+export type ReviewApiError = {
+  code: string
+  message: string
 }
 
 export type ReviewApiResponse = {
-  success: boolean
+  success: true
   data: ReviewReport
 }
 
-export type ReviewFormState = {
-  repoUrl: string
+export type ReviewApiFailure = {
+  success: false
+  error: ReviewApiError
+}
+
+export type ReviewRequestInput =
+  | {
+      repoUrl: string
+    }
+  | {
+      repoFullName: string
+    }
+
+export type GitHubUser = {
+  id: number
+  login: string
+  avatarUrl?: string
+}
+
+export type GitHubSession = {
+  connected: boolean
+  user: GitHubUser | null
+}
+
+export type GitHubSessionResponse = {
+  success: true
+  data: GitHubSession
+}
+
+export type GitHubRepository = {
+  id?: number
+  fullName: string
+  private?: boolean
+  defaultBranch?: string
+  installationId: number
+  installationAccount?: string
+  installationTargetType?: string
+}
+
+export type GitHubReposResponse = {
+  success: true
+  data: {
+    repositories: GitHubRepository[]
+  }
 }
