@@ -6,8 +6,10 @@ import type {
   GitHubSessionResponse,
   ReviewApiFailure,
   ReviewDiagnostic,
+  ReviewPagination,
   ReviewReport,
   ReviewRequestInput,
+  ReviewRequestOptions,
   ReviewStatus,
   Severity,
 } from '@/features/review/model/types'
@@ -28,14 +30,27 @@ type ServerReviewMeta = {
 }
 
 type ServerReviewPayload = {
+  reviewId?: string
   score?: number
   status?: string
   summary?: {
     diagnosticsCount?: number
+    totalDiagnosticCount?: number
+    errorCount?: number
+    warningCount?: number
+    affectedFileCount?: number
   }
   diagnostics?: unknown[]
   raw: unknown
   meta: ServerReviewMeta
+  pagination?: {
+    page?: number
+    page_size?: number
+    total_items?: number
+    total_pages?: number
+    has_next_page?: boolean
+    has_previous_page?: boolean
+  }
 }
 
 type ServerReviewApiResponse = {
@@ -84,6 +99,32 @@ function getStringValue(source: JsonObject | null | undefined, key: string): str
   }
 
   return typeof source[key] === 'string' ? source[key] : null
+}
+
+function normalizePagination(pagination: ServerReviewPayload['pagination']): ReviewPagination | undefined {
+  if (!pagination) {
+    return undefined
+  }
+
+  if (
+    typeof pagination.page !== 'number' ||
+    typeof pagination.page_size !== 'number' ||
+    typeof pagination.total_items !== 'number' ||
+    typeof pagination.total_pages !== 'number' ||
+    typeof pagination.has_next_page !== 'boolean' ||
+    typeof pagination.has_previous_page !== 'boolean'
+  ) {
+    return undefined
+  }
+
+  return {
+    page: pagination.page,
+    pageSize: pagination.page_size,
+    totalItems: pagination.total_items,
+    totalPages: pagination.total_pages,
+    hasNextPage: pagination.has_next_page,
+    hasPreviousPage: pagination.has_previous_page,
+  }
 }
 
 function normalizeDiagnostic(item: unknown, index: number): ReviewDiagnostic {
@@ -213,19 +254,32 @@ function getScoreLabel(status: ReviewStatus, score: number | null, diagnosticsCo
 }
 
 function normalizeReport(payload: ServerReviewPayload): ReviewReport {
+  const hasPayloadDiagnostics = Array.isArray(payload.diagnostics)
   const payloadDiagnostics = Array.isArray(payload.diagnostics) ? payload.diagnostics : []
   const rawObject = isObject(payload.raw) ? payload.raw : null
   const rawSummary = rawObject ? getNestedObject(rawObject, 'summary') : null
-  const diagnosticsSource = payloadDiagnostics.length > 0 ? payloadDiagnostics : extractRawDiagnostics(payload.raw)
+  const diagnosticsSource = hasPayloadDiagnostics ? payloadDiagnostics : extractRawDiagnostics(payload.raw)
   const diagnostics = diagnosticsSource.map(normalizeDiagnostic)
   const uniqueFiles = new Set(diagnostics.map((diagnostic) => diagnostic.filePath))
-  const errorCount = diagnostics.filter((diagnostic) => diagnostic.severity === 'error').length
-  const warningCount = diagnostics.filter((diagnostic) => diagnostic.severity === 'warning').length
-  const totalDiagnosticCount = diagnostics.length
+  const derivedErrorCount = diagnostics.filter((diagnostic) => diagnostic.severity === 'error').length
+  const derivedWarningCount = diagnostics.filter((diagnostic) => diagnostic.severity === 'warning').length
+  const derivedTotalDiagnosticCount = diagnostics.length
   const score =
     typeof payload.score === 'number'
       ? payload.score
       : getNumberValue(rawSummary, 'score') ?? getNumberValue(rawObject, 'score')
+  const totalDiagnosticCount =
+    typeof payload.summary?.totalDiagnosticCount === 'number'
+      ? payload.summary.totalDiagnosticCount
+      : getNumberValue(rawSummary, 'totalDiagnosticCount') ?? derivedTotalDiagnosticCount
+  const errorCount =
+    typeof payload.summary?.errorCount === 'number'
+      ? payload.summary.errorCount
+      : getNumberValue(rawSummary, 'errorCount') ?? derivedErrorCount
+  const warningCount =
+    typeof payload.summary?.warningCount === 'number'
+      ? payload.summary.warningCount
+      : getNumberValue(rawSummary, 'warningCount') ?? derivedWarningCount
   const status = normalizeStatus(payload.status) !== 'unknown'
     ? normalizeStatus(payload.status)
     : deriveStatusFromCounts(score, errorCount, warningCount, totalDiagnosticCount)
@@ -238,6 +292,7 @@ function normalizeReport(payload: ServerReviewPayload): ReviewReport {
       : getNumberValue(rawSummary, 'diagnosticsCount') ?? totalDiagnosticCount
 
   return {
+    reviewId: typeof payload.reviewId === 'string' ? payload.reviewId : undefined,
     score,
     status,
     diagnostics,
@@ -264,6 +319,7 @@ function normalizeReport(payload: ServerReviewPayload): ReviewReport {
       totalDiagnosticCount,
       scoreLabel: getStringValue(rawSummary, 'scoreLabel') ?? getScoreLabel(status, score, totalDiagnosticCount),
     },
+    pagination: normalizePagination(payload.pagination),
   }
 }
 
@@ -283,20 +339,52 @@ function getErrorMessage(payload: ReviewApiFailure | { error?: string } | null, 
   return fallback
 }
 
-export async function requestReview(input: ReviewRequestInput): Promise<ReviewReport> {
+function buildReviewRequestPayload(input: ReviewRequestInput, options?: ReviewRequestOptions) {
+  return {
+    ...input,
+    ...(options?.page ? { page: options.page } : {}),
+    ...(options?.pageSize ? { page_size: options.pageSize } : {}),
+  }
+}
+
+export async function requestReview(
+  input: ReviewRequestInput,
+  options?: ReviewRequestOptions,
+): Promise<ReviewReport> {
   const response = await fetch(`${API_BASE_URL}/api/review`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
     credentials: 'include',
-    body: JSON.stringify(input),
+    body: JSON.stringify(buildReviewRequestPayload(input, options)),
   })
 
   const payload = await parseResponse<ServerReviewApiResponse>(response)
 
   if (!response.ok || !payload || !('success' in payload) || !payload.success) {
     throw new Error(getErrorMessage(payload as ReviewApiFailure | null, 'Review request failed'))
+  }
+
+  return normalizeReport(payload.data)
+}
+
+export async function fetchReviewPage(
+  reviewId: string,
+  page: number,
+  pageSize: number,
+): Promise<ReviewReport> {
+  const params = new URLSearchParams({
+    page: String(page),
+    page_size: String(pageSize),
+  })
+  const response = await fetch(`${API_BASE_URL}/api/review/${reviewId}?${params.toString()}`, {
+    credentials: 'include',
+  })
+  const payload = await parseResponse<ServerReviewApiResponse>(response)
+
+  if (!response.ok || !payload || !('success' in payload) || !payload.success) {
+    throw new Error(getErrorMessage(payload as ReviewApiFailure | null, 'Failed to load review page'))
   }
 
   return normalizeReport(payload.data)

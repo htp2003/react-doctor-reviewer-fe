@@ -1,25 +1,24 @@
 import { getDiagnosticsPreview } from '@/features/review/model/review-utils'
-import type { ReviewReport } from '@/features/review/model/types'
+import type { DiagnosticsListProps } from '@/features/review/components/review-component.types'
 
-type DiagnosticsListProps = {
-  report: ReviewReport | null
-}
-
-export function DiagnosticsList({ report }: DiagnosticsListProps) {
-  const diagnostics = report ? getDiagnosticsPreview(report.diagnostics) : []
+export function DiagnosticsList({
+  report,
+  title = 'What to fix first',
+  subtitle = 'Priority Diagnostics',
+  emptyMessage = 'Nothing yet. When a review completes, the most important findings will surface here first.',
+  limit = 8,
+}: DiagnosticsListProps) {
+  const diagnostics = report ? getDiagnosticsPreview(report.diagnostics, limit) : []
 
   return (
     <section className="panel diagnostics-panel">
       <div className="panel-heading">
-        <p className="eyebrow">Priority Diagnostics</p>
-        <h2>What to fix first</h2>
+        <p className="eyebrow">{subtitle}</p>
+        <h2>{title}</h2>
       </div>
 
       {diagnostics.length === 0 ? (
-        <p className="panel-copy">
-          Nothing yet. When a review completes, the most important findings will surface
-          here first.
-        </p>
+        <p className="panel-copy">{emptyMessage}</p>
       ) : (
         <ul className="diagnostics-list">
           {diagnostics.map((diagnostic) => (

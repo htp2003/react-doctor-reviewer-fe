@@ -6,8 +6,7 @@ export function ReviewHero() {
         <h1>Frontend reviewer</h1>
       </div>
       <p className="hero-copy">
-        Public scans use a URL. Private scans use your GitHub session and
-        repository access.
+        Launch a public or private scan, watch the review progress, and reopen recent results from the browser history rail.
       </p>
     </section>
   );

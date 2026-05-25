@@ -1,4 +1,4 @@
-import type { ReviewDiagnostic, ReviewSummary, Severity } from './types'
+import type { ReviewDiagnostic, ReviewReport, ReviewSourceMode, ReviewSummary, Severity } from './types'
 
 const severityRank: Record<Severity, number> = {
   error: 0,
@@ -53,4 +53,33 @@ export function getRepoName(repoUrl: string): string {
   } catch {
     return repoUrl
   }
+}
+
+export function getReviewSourceMode(report: ReviewReport): ReviewSourceMode {
+  return report.meta.private ? 'private' : 'public'
+}
+
+export function getReviewSourceLabel(sourceMode: ReviewSourceMode): string {
+  return sourceMode === 'private' ? 'Private GitHub repo' : 'Public GitHub repo'
+}
+
+export function getReviewRepoLabel(report: ReviewReport): string {
+  if (report.meta.repoFullName) {
+    return report.meta.repoFullName
+  }
+
+  return getRepoName(report.meta.repoUrl)
+}
+
+export function formatReviewStatus(status: string): string {
+  return status.replace(/_/g, ' ')
+}
+
+export function formatReviewTimestamp(timestamp: string): string {
+  const date = new Date(timestamp)
+
+  return new Intl.DateTimeFormat('en-US', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(date)
 }

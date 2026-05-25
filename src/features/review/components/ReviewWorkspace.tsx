@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { startTransition, useEffect, useState } from 'react'
 import { useDeferredValue } from 'react'
 import type { FormEvent } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   fetchGitHubRepos,
   fetchGitHubSession,
@@ -8,32 +9,34 @@ import {
   logoutGitHub,
   requestReview,
 } from '@/features/review/api/review-api'
-import { DiagnosticsList } from '@/features/review/components/DiagnosticsList'
+import { RecentReviewsPanel } from '@/features/review/components/RecentReviewsPanel'
 import { ReviewHero } from '@/features/review/components/ReviewHero'
 import { ReviewResultCard } from '@/features/review/components/ReviewResultCard'
+import { getRecentReviews, saveRecentReview } from '@/features/review/model/review-history'
 import type {
   GitHubRepository,
   GitHubSession,
-  ReviewReport,
+  ReviewLoadingTarget,
   ReviewSourceMode,
 } from '@/features/review/model/types'
-import { API_BASE_URL } from '@/shared/config/env'
+import { getRepoName } from '@/features/review/model/review-utils'
 import { validateRepoUrl } from '@/shared/lib/validateRepoUrl'
 
 type RequestState = {
   error: string | null
-  report: ReviewReport | null
 }
 
 const initialUrl = 'https://github.com/millionco/react-doctor'
+const initialDiagnosticsPage = 1
+const initialDiagnosticsPageSize = 25
 
 export function ReviewWorkspace() {
+  const navigate = useNavigate()
   const [sourceMode, setSourceMode] = useState<ReviewSourceMode>('public')
   const [repoUrl, setRepoUrl] = useState(initialUrl)
   const [selectedRepoFullName, setSelectedRepoFullName] = useState('')
   const [requestState, setRequestState] = useState<RequestState>({
     error: null,
-    report: null,
   })
   const [session, setSession] = useState<GitHubSession>({
     connected: false,
@@ -45,33 +48,35 @@ export function ReviewWorkspace() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isLoadingSession, setIsLoadingSession] = useState(true)
   const [isLoadingRepos, setIsLoadingRepos] = useState(false)
+  const [loadingTarget, setLoadingTarget] = useState<ReviewLoadingTarget | null>(null)
+  const [loadingStartedAt, setLoadingStartedAt] = useState<number | null>(null)
   const deferredRepoUrl = useDeferredValue(repoUrl)
+  const recentReviews = getRecentReviews()
   const validationMessage = sourceMode === 'public' ? validateRepoUrl(deferredRepoUrl) : null
 
   useEffect(() => {
-    void refreshSession()
-  }, [])
+    async function loadSession() {
+      setIsLoadingSession(true)
+      setSessionError(null)
 
-  async function refreshSession() {
-    setIsLoadingSession(true)
-    setSessionError(null)
+      try {
+        const nextSession = await fetchGitHubSession()
+        setSession(nextSession)
 
-    try {
-      const nextSession = await fetchGitHubSession()
-      setSession(nextSession)
-
-      if (nextSession.connected) {
-        await refreshRepos()
-      } else {
-        setRepositories([])
-        setSelectedRepoFullName('')
+        if (nextSession.connected) {
+          await refreshRepos()
+        } else {
+          setRepositories([])
+          setSelectedRepoFullName('')
+        }
+      } catch (error) {
+        setSessionError(error instanceof Error ? error.message : 'Failed to load GitHub session')
+      } finally {
+        setIsLoadingSession(false)
       }
-    } catch (error) {
-      setSessionError(error instanceof Error ? error.message : 'Failed to load GitHub session')
-    } finally {
-      setIsLoadingSession(false)
     }
-  }
+    void loadSession()
+  }, [])
 
   async function refreshRepos() {
     setIsLoadingRepos(true)
@@ -111,6 +116,26 @@ export function ReviewWorkspace() {
     }
   }
 
+  function getReviewLoadingTarget(): ReviewLoadingTarget {
+    if (sourceMode === 'private') {
+      return {
+        mode: 'private',
+        repoLabel: selectedRepoFullName,
+        sourceLabel: 'Private GitHub repo',
+        targetValue: selectedRepoFullName,
+      }
+    }
+
+    const normalizedRepoUrl = repoUrl.trim()
+
+    return {
+      mode: 'public',
+      repoLabel: getRepoName(normalizedRepoUrl),
+      sourceLabel: 'Public GitHub repo',
+      targetValue: normalizedRepoUrl,
+    }
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
@@ -119,10 +144,9 @@ export function ReviewWorkspace() {
       const nextValidationMessage = validateRepoUrl(normalizedRepoUrl)
 
       if (nextValidationMessage) {
-        setRequestState((currentState) => ({
-          ...currentState,
+        setRequestState({
           error: nextValidationMessage,
-        }))
+        })
         return
       }
     }
@@ -130,36 +154,47 @@ export function ReviewWorkspace() {
     if (sourceMode === 'private' && !selectedRepoFullName) {
       setRequestState({
         error: 'Choose a private repository before running the review.',
-        report: null,
       })
       return
     }
 
+    const nextLoadingTarget = getReviewLoadingTarget()
+
     setIsSubmitting(true)
+    setLoadingTarget(nextLoadingTarget)
+    setLoadingStartedAt(Date.now())
     setRequestState({
       error: null,
-      report: null,
     })
 
     try {
       const report =
         sourceMode === 'public'
-          ? await requestReview({ repoUrl: repoUrl.trim() })
-          : await requestReview({ repoFullName: selectedRepoFullName })
+          ? await requestReview(
+              { repoUrl: repoUrl.trim() },
+              { page: initialDiagnosticsPage, pageSize: initialDiagnosticsPageSize },
+            )
+          : await requestReview(
+              { repoFullName: selectedRepoFullName },
+              { page: initialDiagnosticsPage, pageSize: initialDiagnosticsPageSize },
+            )
+      const reviewId = saveRecentReview(report, nextLoadingTarget)
 
-      setRequestState({
-        error: null,
-        report,
+      startTransition(() => {
+        navigate(
+          `/review/${reviewId}?page=${initialDiagnosticsPage}&page_size=${initialDiagnosticsPageSize}`,
+        )
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unexpected review error'
 
       setRequestState({
         error: message,
-        report: null,
       })
     } finally {
       setIsSubmitting(false)
+      setLoadingTarget(null)
+      setLoadingStartedAt(null)
     }
   }
 
@@ -167,7 +202,7 @@ export function ReviewWorkspace() {
     <div className="review-page">
       <ReviewHero />
 
-      <section className="review-layout">
+      <section className="review-builder-layout">
         <article className="panel panel-form">
           <div className="panel-heading">
             <p className="eyebrow">Repository Review</p>
@@ -282,9 +317,6 @@ export function ReviewWorkspace() {
               <button className="primary-button" type="submit" disabled={isSubmitting}>
                 {isSubmitting ? 'Reviewing…' : 'Run review'}
               </button>
-              <p className="form-hint">
-                Backend endpoint: <code>{API_BASE_URL}</code>
-              </p>
             </div>
 
             {validationMessage ? <p className="inline-message">{validationMessage}</p> : null}
@@ -296,10 +328,33 @@ export function ReviewWorkspace() {
           </form>
         </article>
 
-        <ReviewResultCard report={requestState.report} />
+        <div className="review-side-stack">
+          <section className="panel review-flow-panel">
+            <div className="panel-heading">
+              <p className="eyebrow">Review Flow</p>
+              <h2>What happens after you click run</h2>
+            </div>
+            <ol className="review-flow-list">
+              <li>We fetch the selected repository through the active source mode.</li>
+              <li>React Doctor scans the project and groups diagnostics by priority.</li>
+              <li>The finished result is saved locally so you can reopen it from recent reviews.</li>
+            </ol>
+          </section>
+
+          <RecentReviewsPanel
+            reviews={recentReviews}
+            title="Recent scans"
+            emptyTitle="No saved reviews yet"
+            emptyMessage="Your last ten completed reviews will appear here for quick reopen."
+          />
+        </div>
       </section>
 
-      <DiagnosticsList report={requestState.report} />
+      <ReviewResultCard
+        isLoading={isSubmitting}
+        loadingTarget={loadingTarget}
+        loadingStartedAt={loadingStartedAt}
+      />
     </div>
   )
 }
